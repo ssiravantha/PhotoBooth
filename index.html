@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hand Frame Darkroom</title>
+<title>Hand Frame Photo Booth</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&display=swap">
@@ -84,13 +84,15 @@
   #shots:empty::before { content:'Finished strips land here. Take 4 photos to print your first one.'; color:var(--muted); grid-column:1/-1; }
   #shots img { width:100%; height:auto; border-radius:3px; cursor:pointer; box-shadow:0 8px 22px -8px rgba(0,0,0,.5); } #shots img.strip { animation:drop .6s cubic-bezier(.2,.8,.2,1); } @keyframes drop { from{transform:translateY(-28px);opacity:0;} }
   @media (prefers-reduced-motion:reduce){ #shots img.strip{animation:none;} }
+  .icon-btn.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
 </style>
 </head>
 <body>
 <div class="app">
   <header class="bar">
-    <h1>Hand Frame Darkroom</h1>
+    <h1>Hand Frame Photo Booth</h1>
     <div class="bar-actions">
+      <button type="button" id="modeBtn" class="icon-btn" aria-pressed="false">Whole screen: off</button>
       <button type="button" class="icon-btn" data-open="strips">Strips <span id="stripBadge" class="badge" hidden>0</span></button>
       <button type="button" class="icon-btn" data-open="settings">Settings</button>
     </div>
@@ -119,7 +121,7 @@
           <div id="count"></div><div id="flash"></div>
         </div>
         <div id="start"><div class="start-card">
-          <h2>Step into the darkroom</h2>
+          <h2>Step into the booth</h2>
           <p>Hold both hands up like you're gripping the sides of a picture, with thumb and index tips apart. Tilt your hands to tilt the frame. Flip one hand and the frame twists into a bow-tie.</p>
           <p>Prefer corners? Open Settings and choose "L corners".</p>
           <button id="startBtn" type="button" class="pill" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-size:16px;padding:14px 26px">Start camera</button>
@@ -611,6 +613,7 @@ function drawFrameChrome(f, col, label) {
 }
 
 function lockNow() {
+  if (wholeScreen) { note('Whole screen mode: switch back to hand frames to lock one'); return; }
   const now = performance.now();
   const from = frames.length ? frames : (now - lastSnapAt < 8000 ? lastSnap : []);   // hands may have just dropped to reach the mouse
   if (!from.length) { note('No frame to lock yet: hold your hands up first'); return; }
@@ -643,7 +646,7 @@ let smileHold = 0, lastSmileTick = 0, lastAuto = 0, smileScore = 0, facesInFrame
 const HOLD_MS = 500, COOLDOWN_MS = 2500;
 
 function evalSmiles(faceRes, now) {
-  const boxes = [...locked, ...frames];
+  const boxes = wholeScreen ? [FULL] : [...locked, ...frames];
   const faces = faceRes.faceLandmarks || [], bs = faceRes.faceBlendshapes || [];
   let inside = 0, minScore = 1;
   faces.forEach((lm, i) => {
@@ -664,6 +667,20 @@ function evalSmiles(faceRes, now) {
 }
 
 // ---------- Main loop ----------
+// ---------- Whole-screen mode ----------
+// One switch: skip the hand frames and put the chosen filter over the entire picture.
+let wholeScreen = false;
+const FULL = { pts:[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}], x:0, y:0, w:W, h:H };
+const modeBtn = document.getElementById('modeBtn');
+function setWhole(on) {
+  wholeScreen = on; smileHold = 0;
+  modeBtn.textContent = 'Whole screen: ' + (on ? 'on' : 'off');
+  modeBtn.setAttribute('aria-pressed', on);
+  modeBtn.classList.toggle('on', on);
+  note(on ? 'Whole screen: the filter covers everything' : 'Hand frames: the filter shows inside your hands');
+}
+modeBtn.onclick = () => setWhole(!wholeScreen);
+
 function loop() {
   requestAnimationFrame(loop);
   if (video.readyState < 2) return;
@@ -676,6 +693,17 @@ function loop() {
     if (faceLm) evalSmiles(faceLm.detectForVideo(video, now), now);
   }
   ctx.drawImage(src, 0, 0);
+  if (wholeScreen) {
+    drawFiltered(ctx, FULL, now);
+    if (document.getElementById('auto').checked) {
+      ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, H - 8, W, 8);
+      ctx.fillStyle = '#ffd34d'; ctx.fillRect(0, H - 8, W * Math.min(1, smileHold / HOLD_MS), 8); ctx.restore();
+    }
+    const st = !document.getElementById('auto').checked ? '' : facesInFrame ? `, smile ${Math.round(smileScore * 100)}%` : ', no face found';
+    statusEl.textContent = `Whole screen, ${FILTERS[current].name}${st}`;
+    if (now < noteUntil) statusEl.textContent = noteText;
+    return;
+  }
   const all = [...locked, ...frames];
   if (all.length) {
     if (document.getElementById('dim').checked) {
@@ -771,7 +799,7 @@ document.getElementById('retakeBtn').onclick = () => { if (turn.length) { turn.p
 updateTurnUI();
 
 function grab() {
-  const items = [...locked.map(l => ({ r:l, fi:l.fi })), ...frames.map(f => ({ r:f, fi:current }))];
+  const items = wholeScreen ? [{ r:FULL, fi:current }] : [...locked.map(l => ({ r:l, fi:l.fi })), ...frames.map(f => ({ r:f, fi:current }))];
   if (!items.length) { note('No frame to shoot: hold your hands up'); return; }
   if (turn.length >= MAX_SHOTS) return;
   updateSrc();
@@ -809,6 +837,7 @@ document.addEventListener('click', e => { const b = e.target.closest && e.target
 addEventListener('keydown', e => {
   if (e.target.tagName === 'SELECT') return;
   if (e.code === 'Space') { e.preventDefault(); capture(); }
+  else if (e.code === 'KeyF') setWhole(!wholeScreen);
   else if (e.code === 'KeyL') lockNow();
   else if (e.code === 'KeyZ') locked.pop();
 });
